@@ -7,14 +7,18 @@ from waitress import serve
 
 
 class Predictor:
+    def __init__(self):
+        logging.info('Initializing...')
+        logging.info('Done.')
+
     def predict(self, data):
         question = data['question']  # noqa
 
         # Do the heavy lifting here
-        logging.info('Crunching the numbers...')
+        logging.info('Predicting...')
         answer = 'Maybe.'
         confidence = 1.
-        logging.info('Done')
+        logging.info('Done.')
 
         return {'answer': answer, 'confidence': confidence}
 
