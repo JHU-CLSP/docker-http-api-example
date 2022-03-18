@@ -14,13 +14,15 @@ Build the Docker image with the following command:
 docker build -t docker-http-api-example .
 ```
 
-Then run a container:
+Then start a container from that image:
 
 ```
 docker run -it -p 8123:8080 docker-http-api-example
 ```
 
-(where 8123 is just some open TCP port on your system).
+where 8123 is just some open TCP port on your system.  The HTTP
+server listens on port 8080 inside the container, and Docker maps
+that to port 8123 on your host system.
 
 Then, in another terminal tab/window, do the following to send a
 request to the server.  Install the Python `requests` package (using
