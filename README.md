@@ -33,6 +33,6 @@ requests.post('http://localhost:8123/ask', json={'question': 'Will I?'}).json()
 
 The last command should return a parsed response like:
 
-```json
+```python
 {'answer': 'Maybe.', 'confidence': 1.0}
 ```
