@@ -1,0 +1,22 @@
+# Docker-compose file describing how to start the asynchronous example
+
+version: "3"
+
+services:
+  http:
+    build: .
+    command: python http-server.py --redis-host redis
+    depends_on:
+      - redis
+    ports:
+      - '8123:8080'
+
+  worker:
+    build: .
+    command: python worker.py --redis-host redis
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:6.2
+    command: --maxmemory 1gb --maxmemory-policy allkeys-lru
