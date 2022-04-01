@@ -174,6 +174,15 @@ while not done:
         time.sleep(1)
 ```
 
+#### Parallel Processing
+
+Parallel processing can be achieved by running multiple instances of
+the worker using the `--scale` flag to `docker-compose`:
+
+```
+docker-compose up --scale worker=4
+```
+
 #### Note on Building Images with Docker Compose
 
 If you run Docker Compose multiple times, it will only rebuild the
