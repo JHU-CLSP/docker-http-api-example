@@ -6,7 +6,7 @@ from typing import Any, Dict
 from redis import Redis
 
 from factorization import factorize
-from redis_tasks import TaskManager
+from redis_tasks import TaskManager, DistributedTaskManager
 
 
 class Worker:
@@ -46,6 +46,9 @@ def main():
                         help='Redis input cache DB number')
     parser.add_argument('--sleep-interval', type=int, default=1,
                         help='Number of seconds to sleep after finding input cache is empty')
+    parser.add_argument('--distributed', action='store_true',
+                        help='If set, use distributed task manager; '
+                             'otherwise, use non-distributed version.')
     parser.add_argument('--log-level',
                         choices=('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'),
                         default='INFO',
@@ -58,7 +61,13 @@ def main():
 
     input_cache = Redis(host=args.redis_host, port=args.redis_port, db=args.input_cache_db)
     output_cache = Redis(host=args.redis_host, port=args.redis_port, db=args.output_cache_db)
-    task_manager = TaskManager(input_cache, output_cache)
+    if args.distributed:
+        logging.info('Using distributed task manager.')
+        task_manager_class = DistributedTaskManager
+    else:
+        logging.info('Using non-distributed task manager.')
+        task_manager_class = TaskManager
+    task_manager = task_manager_class(input_cache, output_cache)
     worker = Worker()
     task_manager.process_tasks_star({'factorization': worker.do_task})
 

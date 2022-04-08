@@ -192,8 +192,49 @@ images under certain conditions.  To rebuild the images every time, do:
 docker-compose up --build
 ```
 
+Run `docker-compose help up` for more information.
+
 #### Note on Input and Output Size
 
 Redis keys and values have a maximum size of 512 MB.  If your
 task inputs or outputs reach that threshold when encoded as JSON, you
 will need to take a different approach.
+
+### Task Types and Distributed Processing
+
+The asynchronous task manager implemented for this example allows each
+key to have its own "type."  While there is only one key type in the
+example (`factorization`), in real-world applications there may be
+several different kinds of tasks that we wish to do.  For example,
+perhaps we are building an API for question answering and wish to allow
+the consumer to specify which question answering model to use for each
+request.  The task type functionality implemented in the example code
+can be used to route requests specifying different models to different
+handlers in the worker process.
+
+The previously discussed asynchronous processing strategy stores each
+task input as a simple redis key.  One drawback of this approach is
+that each worker samples inputs from the entire keyspace; workers
+cannot efficiently restrict sampling to a single key type or subset of
+possible key types.  This means that workers that interface directly
+with the task manager must be able to handle all key types.  In the
+question answering use case, this structure requires each worker
+process to be able to run all models, creating unnecessary coupling in
+the code and requiring the software dependencies for all models to be
+installed in the same container.
+
+To handle task types in a more distributed fashion and allow more
+flexibility in the definition of workers, we need to use a different
+redis data structure.  The asynchronous processing example includes an
+alternate, distributed implementation of the task manager that uses a
+redis sorted set for each key type.  Using this implementation, each
+key type can be handled by a different worker process. In the question
+answering use case, this approach allows us to keep each model in its
+own container, allowing individual models to be run (or not run)
+independently of one another and reducing our exposure to dependency
+issues.
+
+To use the distributed task manager in the example, add the
+`--distributed` flag to the ends of the commands (the lines starting
+with `command:`) of the `worker` and `http-server` services in
+`docker-compose.yml`.

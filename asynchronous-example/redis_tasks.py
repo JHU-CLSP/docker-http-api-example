@@ -6,6 +6,7 @@ from functools import wraps
 from time import sleep
 from typing import Any, Callable, Dict, List, Optional, NamedTuple, Tuple, Union
 
+from overrides import overrides
 from redis import Redis
 
 
@@ -89,10 +90,47 @@ class TaskManager:
                 load=load,
             )
         else:
-            self.input_cache.set(key, '1', ex=self.input_expire)
+            self._update_input_key(key_type, key)
             load = self.input_cache.dbsize()
             return TaskStatus(
                 done=False,
                 value=None,
                 load=load,
             )
+
+    def _update_input_key(self, key_type: str, key: str):
+        self.input_cache.set(key, '1', ex=self.input_expire)
+
+
+class DistributedTaskManager(TaskManager):
+    @overrides
+    def process_tasks(self, handlers: Dict[str, Callable[[Dict[str, Any]], JSONValue]]):
+        key_types = list(handlers.keys())
+
+        while True:
+            try:
+                time = self._get_time()
+                for key_type in key_types:
+                    self.input_cache.zremrangebyscore(key_type, 0, time - self.input_expire)
+
+                pop_result = self.input_cache.bzpopmax(key_types)
+                if pop_result is not None:
+                    (key_type_bytes, key, score) = pop_result
+                    key_type = key_type_bytes.decode('utf-8')
+                    key_params = parse_key(key)[1]
+                    handler = handlers[key_type]
+                    value = handler(key_params)
+                    self.output_cache.set(key, json.dumps(value))
+
+                else:
+                    sleep(self.sleep_interval)
+
+            except Exception:
+                logging.exception('Caught exception while handling task')
+
+    @overrides
+    def _update_input_key(self, key_type: str, key: str):
+        self.input_cache.zadd(key_type, {key: self._get_time()})
+
+    def _get_time(self) -> int:
+        return self.input_cache.time()[0]
