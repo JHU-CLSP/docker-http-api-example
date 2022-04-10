@@ -238,3 +238,19 @@ To use the distributed task manager in the example, add the
 `--distributed` flag to the ends of the commands (the lines starting
 with `command:`) of the `worker` and `http-server` services in
 `docker-compose.yml`.
+
+#### Locking
+
+One of the potential benefits of the non-distributed task manager is
+that by construction, only one task can be performed at a time.  In the
+basic distributed task management example, tasks can be performed
+simultaneously when there is more than one worker container.  To
+restore the one-task-at-a-time property to the distributed task
+manager, we can add a distributed lock.  The Redis Python library has
+a distributed lock implementation, and it can be used in the example by
+adding `--distributed-lock 0` to the end of the worker command.  Note
+that the `--distributed` flag still needs to be passed to both the
+`worker` and `http-server` services.  While the use of the lock in this
+example may seem counterproductive, it is useful in applications where,
+for example, all task types are performed on the same GPU on the same
+machine.

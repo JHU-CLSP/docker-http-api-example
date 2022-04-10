@@ -2,11 +2,15 @@
 
 import logging
 from typing import Any, Dict
+from functools import partial
 
 from redis import Redis
+from redis.lock import Lock
 
 from factorization import factorize
 from redis_tasks import TaskManager, DistributedTaskManager
+
+LOCK_NAME = 'cpu'
 
 
 class Worker:
@@ -49,6 +53,10 @@ def main():
     parser.add_argument('--distributed', action='store_true',
                         help='If set, use distributed task manager; '
                              'otherwise, use non-distributed version.')
+    parser.add_argument('--distributed-lock', type=int, default=None,
+                        help='If set, acquire global redis lock '
+                             '(with specified timeout, in seconds, or no timeout if 0) '
+                             'before running each task. Implies --distributed .')
     parser.add_argument('--log-level',
                         choices=('DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'),
                         default='INFO',
@@ -61,9 +69,15 @@ def main():
 
     input_cache = Redis(host=args.redis_host, port=args.redis_port, db=args.input_cache_db)
     output_cache = Redis(host=args.redis_host, port=args.redis_port, db=args.output_cache_db)
+    if args.distributed_lock is not None:
+        args.distributed = True
+        lock = Lock(input_cache, LOCK_NAME, timeout=args.distributed_lock)
+    else:
+        lock = None
+
     if args.distributed:
         logging.info('Using distributed task manager.')
-        task_manager_class = DistributedTaskManager
+        task_manager_class = partial(DistributedTaskManager, lock=lock)
     else:
         logging.info('Using non-distributed task manager.')
         task_manager_class = TaskManager

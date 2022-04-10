@@ -6,8 +6,10 @@ from functools import wraps
 from time import sleep
 from typing import Any, Callable, Dict, List, Optional, NamedTuple, Tuple, Union
 
-from overrides import overrides
+from overrides import EnforceOverrides, overrides
 from redis import Redis
+from redis.exceptions import LockError, LockNotOwnedError
+from redis.lock import Lock
 
 
 JSONOrderedDict = List[Tuple[str, Any]]
@@ -64,9 +66,12 @@ class TaskManager:
                 key = self.input_cache.randomkey()
                 if key is not None:
                     (key_type, key_params) = parse_key(key)
+                    logging.debug(f'Popped task with key type {key_type}.')
                     handler = handlers.get(key_type)
                     if handler is not None:
+                        logging.debug('Running task handler...')
                         value = handler(key_params)
+                        logging.debug('Storing task result in output cache.')
                         self.output_cache.set(key, json.dumps(value))
                         self.input_cache.delete(key)
                     else:
@@ -102,28 +107,62 @@ class TaskManager:
         self.input_cache.set(key, '1', ex=self.input_expire)
 
 
-class DistributedTaskManager(TaskManager):
+class DistributedTaskManager(TaskManager, EnforceOverrides):
+    lock: Optional[Lock]
+
+    def __init__(self, input_cache: Redis, output_cache: Redis,
+                 input_expire: int = 60, lock: Optional[Lock] = None):
+        TaskManager.__init__(self, input_cache, output_cache,
+                             input_expire=input_expire, sleep_interval=0)
+        self.lock = lock
+
     @overrides
     def process_tasks(self, handlers: Dict[str, Callable[[Dict[str, Any]], JSONValue]]):
         key_types = list(handlers.keys())
 
         while True:
             try:
+                logging.debug(f'Expiring items older than {self.input_expire} seconds...')
                 time = self._get_time()
                 for key_type in key_types:
                     self.input_cache.zremrangebyscore(key_type, 0, time - self.input_expire)
 
+                logging.debug(f'Popping new task from {key_types}...')
                 pop_result = self.input_cache.bzpopmax(key_types)
                 if pop_result is not None:
                     (key_type_bytes, key, score) = pop_result
                     key_type = key_type_bytes.decode('utf-8')
+                    logging.debug(f'Popped task with key type {key_type}.')
                     key_params = parse_key(key)[1]
                     handler = handlers[key_type]
-                    value = handler(key_params)
-                    self.output_cache.set(key, json.dumps(value))
+
+                    if self.lock is not None:
+                        logging.debug('Acquiring lock...')
+                        with self.lock:
+                            logging.debug('Lock acquired; running task handler...')
+                            value = handler(key_params)
+
+                            # Store output within lock context in case the lock has already been
+                            # released:  Exiting the context will raise an exception, but we still
+                            # successfully computed the task output and don't want to waste it.
+                            logging.debug('Storing task result in output cache.')
+                            self.output_cache.set(key, json.dumps(value))
+
+                    else:
+                        logging.debug('Running task handler...')
+                        value = handler(key_params)
+
+                        logging.debug('Storing task result in output cache.')
+                        self.output_cache.set(key, json.dumps(value))
 
                 else:
-                    sleep(self.sleep_interval)
+                    raise Exception('Failed to pop new task.')
+
+            except LockNotOwnedError:
+                logging.warning('Lock has new owner; could not release.')
+
+            except LockError as ex:
+                raise ex
 
             except Exception:
                 logging.exception('Caught exception while handling task')
