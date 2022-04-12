@@ -6,7 +6,6 @@ from functools import wraps
 from time import sleep
 from typing import Any, Callable, Dict, List, Optional, NamedTuple, Tuple, Union
 
-from overrides import EnforceOverrides, overrides
 from redis import Redis
 from redis.exceptions import LockError, LockNotOwnedError
 from redis.lock import Lock
@@ -107,16 +106,15 @@ class TaskManager:
         self.input_cache.set(key, '1', ex=self.input_expire)
 
 
-class DistributedTaskManager(TaskManager, EnforceOverrides):
+class DistributedTaskManager(TaskManager):
     lock: Optional[Lock]
 
     def __init__(self, input_cache: Redis, output_cache: Redis,
                  input_expire: int = 60, lock: Optional[Lock] = None):
-        TaskManager.__init__(self, input_cache, output_cache,
-                             input_expire=input_expire, sleep_interval=0)
+        super().__init__(input_cache, output_cache,
+                         input_expire=input_expire, sleep_interval=0)
         self.lock = lock
 
-    @overrides
     def process_tasks(self, handlers: Dict[str, Callable[[Dict[str, Any]], JSONValue]]):
         key_types = list(handlers.keys())
 
@@ -167,7 +165,6 @@ class DistributedTaskManager(TaskManager, EnforceOverrides):
             except Exception:
                 logging.exception('Caught exception while handling task')
 
-    @overrides
     def _update_input_key(self, key_type: str, key: str):
         self.input_cache.zadd(key_type, {key: self._get_time()})
 
