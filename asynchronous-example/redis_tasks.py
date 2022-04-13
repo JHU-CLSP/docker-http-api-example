@@ -87,46 +87,48 @@ class TaskManager:
         key = format_key(key_type, key_params)
         value_str = self.output_cache.get(key)
         if value_str is not None:
-            load = self.input_cache.dbsize()
             return TaskStatus(
                 done=True,
                 value=json.loads(value_str),
-                load=load,
+                load=self._get_load(),
             )
         else:
             self._update_input_key(key_type, key)
-            load = self.input_cache.dbsize()
             return TaskStatus(
                 done=False,
                 value=None,
-                load=load,
+                load=self._get_load(),
             )
 
     def _update_input_key(self, key_type: str, key: str):
         self.input_cache.set(key, '1', ex=self.input_expire)
 
+    def _get_load(self) -> int:
+        return self.input_cache.dbsize()
+
 
 class DistributedTaskManager(TaskManager):
     lock: Optional[Lock]
+    pop_timeout: int
 
     def __init__(self, input_cache: Redis, output_cache: Redis,
-                 input_expire: int = 60, lock: Optional[Lock] = None):
+                 input_expire: int = 60, lock: Optional[Lock] = None,
+                 pop_timeout: int = 5):
         super().__init__(input_cache, output_cache,
                          input_expire=input_expire, sleep_interval=0)
         self.lock = lock
+        self.pop_timeout = pop_timeout
 
     def process_tasks(self, handlers: Dict[str, Callable[[Dict[str, Any]], JSONValue]]):
         key_types = list(handlers.keys())
 
         while True:
             try:
-                logging.debug(f'Expiring items older than {self.input_expire} seconds...')
-                time = self._get_time()
                 for key_type in key_types:
-                    self.input_cache.zremrangebyscore(key_type, 0, time - self.input_expire)
+                    self._expire_items(key_type)
 
                 logging.debug(f'Popping new task from {key_types}...')
-                pop_result = self.input_cache.bzpopmax(key_types)
+                pop_result = self.input_cache.bzpopmax(key_types, timeout=self.pop_timeout)
                 if pop_result is not None:
                     (key_type_bytes, key, score) = pop_result
                     key_type = key_type_bytes.decode('utf-8')
@@ -153,9 +155,6 @@ class DistributedTaskManager(TaskManager):
                         logging.debug('Storing task result in output cache.')
                         self.output_cache.set(key, json.dumps(value))
 
-                else:
-                    raise Exception('Failed to pop new task.')
-
             except LockNotOwnedError:
                 logging.warning('Lock has new owner; could not release.')
 
@@ -168,5 +167,19 @@ class DistributedTaskManager(TaskManager):
     def _update_input_key(self, key_type: str, key: str):
         self.input_cache.zadd(key_type, {key: self._get_time()})
 
+    def _get_load(self) -> int:
+        load = 0
+        for k in self.input_cache.keys():
+            try:
+                load += self.input_cache.zcard(k)
+            except Exception:
+                pass  # Skip non-sorted-set keys
+
+        return load
+
     def _get_time(self) -> int:
         return self.input_cache.time()[0]
+
+    def _expire_items(self, key_type: str):
+        logging.debug(f'Expiring items in {key_type} older than {self.input_expire} seconds...')
+        self.input_cache.zremrangebyscore(key_type, 0, self._get_time() - self.input_expire)
