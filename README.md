@@ -8,8 +8,8 @@ that system.
 
 Two examples are provided: one for synchronous processing and one for
 asynchronous processing.  The asynchronous example is more complex but
-more robust to long-running tasks.  If your tasks take more than a
-few seconds to complete, I suggest using an asynchronous approach.
+may work better when each prediction (or background task)
+takes a long time to finish.
 
 The task handlers process one task at a time.  However, in the
 asynchronous example, parallel processing can be performed by creating
