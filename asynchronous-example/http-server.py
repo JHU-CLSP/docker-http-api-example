@@ -1,15 +1,37 @@
 #!/usr/bin/env python3
 
+import json
 import logging
+from hashlib import sha256
+from typing import Any, Dict
 
 from flask import Flask, jsonify, request
 from redis import Redis
+from rq import Queue  # type: ignore
 from waitress import serve
 
-from redis_tasks import TaskManager, DistributedTaskManager
+from cached_factorization import cached_factorize
 
 
-def create_app(task_manager: TaskManager):
+# Default time-to-live (in seconds) of jobs in queue.
+# We set this to a small number, assuming active jobs will be
+# polled (checked & resubmitted) relatively frequently.
+DEFAULT_TTL = 5
+
+
+def format_key(key_namespace: str, key_params: Dict[str, Any]) -> str:
+    '''
+    Create a unique redis key with given namespace and params.
+
+    Use the key naming convention of namespace:hash to avoid collisions
+    with Redis Queue and other systems.
+    '''
+    key_params_json_bytes = json.dumps(sorted(key_params.items())).encode('ascii')
+    return f'{key_namespace}:{sha256(key_params_json_bytes).hexdigest()}'
+
+
+def create_app(queue: Queue, cache_url: str, ttl: int = DEFAULT_TTL):
+    cache = Redis.from_url(cache_url)
     app = Flask(__name__)
 
     @app.route('/factorize', methods=['POST'])
@@ -21,29 +43,28 @@ def create_app(task_manager: TaskManager):
     def factorize():
         # Compute task parameters from HTTP parameters
         data = request.json
-        key_type = 'factorization'
-        key_params = {'number': data['number']}
 
         # Submit task
-        status = task_manager.submit_task(key_type, key_params)
-
-        if status.done:
-            # Task is done: return done status with result
+        number = data['number']
+        cache_key = format_key('factorize', {'n': number})
+        cache_result = cache.get(cache_key)
+        if cache_result is not None:
+            factorization = json.loads(cache_result)
             return jsonify({
                 'done': True,
-                'number': data['number'],
-                'factorization': status.value['factorization'],
-                'factorization_str': status.value['factorization_str'],
-                'load': status.load
+                'number': number,
+                'factorization': factorization,
+                'factorization_str': ' '.join(f'{b}^{e}' for (b, e) in sorted(factorization)),
             })
         else:
-            # Task is not done: return in-progress status
+            queue.enqueue(
+                cached_factorize, number, cache_key, cache_url,
+                ttl=ttl)
             return jsonify({
                 'done': False,
-                'number': data['number'],
+                'number': number,
                 'factorization': None,
                 'factorization_str': None,
-                'load': status.load
             })
 
     return app
@@ -58,19 +79,12 @@ def main():
                         help='Hostname/IP to listen on.')
     parser.add_argument('--port', type=int, default=8080,
                         help='TCP port to listen on.')
-    parser.add_argument('--redis-host', type=str, default='localhost',
-                        help='Redis cache host.')
-    parser.add_argument('--redis-port', type=int, default=6379,
-                        help='Redis cache port')
-    parser.add_argument('--output-cache-db', type=int, default=0,
-                        help='Redis output cache DB number')
-    parser.add_argument('--input-cache-db', type=int, default=1,
-                        help='Redis input cache DB number')
-    parser.add_argument('--sleep-interval', type=int, default=1,
-                        help='Number of seconds to sleep after finding cache is empty')
-    parser.add_argument('--distributed', action='store_true',
-                        help='If set, use distributed task manager; '
-                             'otherwise, use non-distributed version.')
+    parser.add_argument('--queue-url', type=str, default='redis://localhost',
+                        help='Redis queue URL.')
+    parser.add_argument('--cache-url', type=str, default='redis://localhost',
+                        help='Redis cache URL.')
+    parser.add_argument('--ttl', type=int, default=DEFAULT_TTL,
+                        help='Time-to-live (in seconds) of jobs in queue before they are expired.')
     parser.add_argument('--threads', type=int, default=1,
                         help='Number of threads to use for HTTP server.')
     parser.add_argument('--log-level',
@@ -83,16 +97,8 @@ def main():
         format='[%(asctime)s] %(levelname)s [%(name)s] %(message)s',
         level=args.log_level)
 
-    input_cache = Redis(host=args.redis_host, port=args.redis_port, db=args.input_cache_db)
-    output_cache = Redis(host=args.redis_host, port=args.redis_port, db=args.output_cache_db)
-    if args.distributed:
-        logging.info('Using distributed task manager.')
-        task_manager_class = DistributedTaskManager
-    else:
-        logging.info('Using non-distributed task manager.')
-        task_manager_class = TaskManager
-    task_manager = task_manager_class(input_cache, output_cache)
-    app = create_app(task_manager)
+    queue = Queue(connection=Redis.from_url(args.queue_url))
+    app = create_app(queue, args.cache_url, ttl=args.ttl)
     serve(app, host=args.host, port=args.port, threads=args.threads)
 
 

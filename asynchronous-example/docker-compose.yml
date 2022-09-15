@@ -5,18 +5,22 @@ version: "3"
 services:
   http:
     build: .
-    command: python http-server.py --redis-host redis
+    command: python http-server.py --queue-url redis://redis-queue --cache-url redis://redis-cache
     depends_on:
-      - redis
+      - redis-queue
+      - redis-cache
     ports:
       - '8123:8080'
 
   worker:
     build: .
-    command: python worker.py --redis-host redis
+    command: rq worker --url redis://redis-queue
     depends_on:
-      - redis
+      - redis-queue
 
-  redis:
+  redis-queue:
+    image: redis:6.2
+
+  redis-cache:
     image: redis:6.2
     command: --maxmemory 1gb --maxmemory-policy allkeys-lru
